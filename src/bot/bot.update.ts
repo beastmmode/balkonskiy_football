@@ -21,11 +21,11 @@ export class BotUpdate {
         'Бот для организации футбола в группе.',
         '',
         'Создать игру:',
-        '/newgame 2026-03-08 | 20:00 | Арена Юг-2 | 20 | 400 сом | 0555xxxxxx (МБанк)',
-        '/newgame 2026-03-08 | 20:00 | Арена Юг-2 | 15 | 400 сом | 0555xxxxxx (МБанк)',
+        '/new 2026-03-08 | 20:00 | Арена Юг-2 | 20 | 400 сом | 0555xxxxxx (МБанк)',
+        '/new 2026-03-08 | 20:00 | Арена Юг-2 | 15 | 400 сом | 0555xxxxxx (МБанк)',
         '',
         'Очистить игры в чате:',
-        '/cleargames',
+        '/clear',
         '',
         'В группе у игроков будут кнопки команд, после записи бот обновляет закрепленное сообщение.',
       ].join('\n'),
@@ -40,7 +40,7 @@ export class BotUpdate {
     await this.onStart(ctx);
   }
 
-  @Command('newgame')
+  @Command('new')
   async onNewGame(@Ctx() ctx: Context): Promise<void> {
     const isAdmin = await this.isAdminCommand(ctx);
     if (!isAdmin) {
@@ -53,7 +53,7 @@ export class BotUpdate {
       return;
     }
 
-    const payload = msg.text.replace('/newgame', '').trim();
+    const payload = msg.text.replace('/new', '').trim();
     const parsed = this.parseNewGamePayload(payload);
     if (!parsed.ok) {
       await ctx.reply(parsed.error);
@@ -108,7 +108,7 @@ export class BotUpdate {
     }
   }
 
-  @Command('cleargames')
+  @Command('clear')
   async onClearGames(@Ctx() ctx: Context): Promise<void> {
     const isAdmin = await this.isAdminCommand(ctx);
     if (!isAdmin) {
@@ -416,7 +416,7 @@ export class BotUpdate {
       return {
         ok: false,
         error:
-          'Формат: /newgame YYYY-MM-DD | HH:mm | Поле | 15 или 20 | Цена (например 400 сом) | Реквизиты',
+          'Формат: /new YYYY-MM-DD | HH:mm | Поле | 15 или 20 | Цена (например 400 сом) | Реквизиты',
       };
     }
 
