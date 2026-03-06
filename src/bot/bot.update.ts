@@ -8,6 +8,7 @@ import { StorageService } from '../storage/storage.service';
 export class BotUpdate {
   private readonly logger = new Logger(BotUpdate.name);
   private readonly teamNamePool = ['Запад', 'Микраши', 'Золотой квадрат', 'БРГ'];
+  private readonly ownerUserId = 6869178780;
   private readonly faqText = [
     'FAQ для игроков',
     '',
@@ -46,30 +47,26 @@ export class BotUpdate {
 
   @Start()
   async onStart(@Ctx() ctx: Context): Promise<void> {
-    if (!(await this.isAdminCommand(ctx))) {
+    if (ctx.chat?.type !== 'private') {
       return;
     }
     await ctx.reply(
       [
-        'Бот для организации футбола в группе.',
+        'Привет! Я бот для организации футбола в группе.',
         '',
-        'Создать игру:',
-        '/new 2026-03-08 | 20:00 | Арена Юг-2 | 20 | 400 сом | 0555xxxxxx (МБанк)',
-        '/new 2026-03-08 | 20:00 | Арена Юг-2 | 15 | 400 сом | 0555xxxxxx (МБанк)',
+        'Команды для админа в группе:',
+        '/new ...  — создать/обновить игру',
+        '/game — показать актуальную игру',
+        '/clear — удалить актуальную игру',
         '',
-        'Очистить игры в чате:',
-        '/clear',
-        '',
-        'В группе у игроков будут кнопки команд, после записи бот обновляет закрепленное сообщение.',
+        'Для игроков:',
+        '/faq — краткая инструкция',
       ].join('\n'),
     );
   }
 
   @Help()
   async onHelp(@Ctx() ctx: Context): Promise<void> {
-    if (!(await this.isAdminCommand(ctx))) {
-      return;
-    }
     await this.onStart(ctx);
   }
 
@@ -84,9 +81,8 @@ export class BotUpdate {
 
   @Command('new')
   async onNewGame(@Ctx() ctx: Context): Promise<void> {
-    const isAdmin = await this.isAdminCommand(ctx);
-    if (!isAdmin) {
-      await ctx.reply('Только администратор группы может создавать игру.');
+    if (!this.isOwnerUser(ctx)) {
+      await ctx.reply('Только владелец бота может использовать /new.');
       return;
     }
 
@@ -95,7 +91,7 @@ export class BotUpdate {
       return;
     }
 
-    const payload = msg.text.replace('/new', '').trim();
+    const payload = this.stripCommand(msg.text);
     const parsed = this.parseNewGamePayload(payload);
     if (!parsed.ok) {
       await ctx.reply(parsed.error);
@@ -125,6 +121,21 @@ export class BotUpdate {
     };
 
     const db = await this.storageService.readDb();
+    const existingGame = db.games.find((item) => item.chatId === chatId);
+    if (existingGame?.messageId) {
+      try {
+        await ctx.telegram.unpinChatMessage(chatId, existingGame.messageId);
+      } catch (error) {
+        this.logger.warn(`Could not unpin old game message ${existingGame.messageId} in chat ${chatId}`);
+      }
+      try {
+        await ctx.telegram.deleteMessage(chatId, existingGame.messageId);
+      } catch (error) {
+        this.logger.warn(`Could not delete old game message ${existingGame.messageId} in chat ${chatId}`);
+      }
+    }
+
+    db.games = db.games.filter((item) => item.chatId !== chatId);
     db.games.push(game);
     await this.storageService.writeDb(db);
 
@@ -150,11 +161,11 @@ export class BotUpdate {
     }
   }
 
-  @Command('clear')
-  async onClearGames(@Ctx() ctx: Context): Promise<void> {
+  @Command('game')
+  async onGame(@Ctx() ctx: Context): Promise<void> {
     const isAdmin = await this.isAdminCommand(ctx);
     if (!isAdmin) {
-      await ctx.reply('Только администратор группы может очищать игры.');
+      await ctx.reply('Только администратор группы может управлять игрой.');
       return;
     }
 
@@ -164,12 +175,65 @@ export class BotUpdate {
     }
 
     const db = await this.storageService.readDb();
-    const before = db.games.length;
-    db.games = db.games.filter((game) => game.chatId !== chatId);
-    const removed = before - db.games.length;
+    const game = db.games.find((item) => item.chatId === chatId);
+    if (!game) {
+      await ctx.reply('Актуальная игра не найдена. Создайте через /new');
+      return;
+    }
+    this.normalizeGame(game);
+
+    if (game.messageId) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, game.messageId);
+      } catch (error) {
+        this.logger.warn(`Could not delete previous game message ${game.messageId} in chat ${chatId}`);
+      }
+    }
+
+    const sent = await ctx.reply(this.renderGameText(game), {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard(this.buildGameKeyboard(game)),
+    });
+    game.messageId = sent.message_id;
     await this.storageService.writeDb(db);
 
-    await ctx.reply(`Удалено игр: ${removed}`);
+    try {
+      await ctx.telegram.pinChatMessage(chatId, sent.message_id, { disable_notification: true });
+    } catch (error) {
+      this.logger.warn(`Could not pin game message in chat ${chatId}`);
+    }
+  }
+
+  @Command('clear')
+  async onClearGames(@Ctx() ctx: Context): Promise<void> {
+    if (!this.isOwnerUser(ctx)) {
+      await ctx.reply('Только владелец бота может использовать /clear.');
+      return;
+    }
+
+    const chatId = ctx.chat?.id;
+    if (!chatId) {
+      return;
+    }
+
+    const db = await this.storageService.readDb();
+    const game = db.games.find((item) => item.chatId === chatId);
+    if (game?.messageId) {
+      try {
+        await ctx.telegram.unpinChatMessage(chatId, game.messageId);
+      } catch (error) {
+        this.logger.warn(`Could not unpin game message ${game.messageId} in chat ${chatId}`);
+      }
+      try {
+        await ctx.telegram.deleteMessage(chatId, game.messageId);
+      } catch (error) {
+        this.logger.warn(`Could not delete game message ${game.messageId} in chat ${chatId}`);
+      }
+    }
+    db.games = db.games.filter((item) => item.chatId !== chatId);
+    await this.storageService.writeDb(db);
+
+    await ctx.reply('Актуальная игра удалена.');
   }
 
   @Action(/^(join_team|leave):/)
@@ -525,6 +589,18 @@ export class BotUpdate {
       paid: Boolean(player.paid),
       tentative: Boolean(player.tentative),
     }));
+  }
+
+  private stripCommand(text: string): string {
+    const firstSpace = text.indexOf(' ');
+    if (firstSpace === -1) {
+      return '';
+    }
+    return text.slice(firstSpace + 1).trim();
+  }
+
+  private isOwnerUser(ctx: Context): boolean {
+    return ctx.from?.id === this.ownerUserId;
   }
 
   private async isAdminCommand(ctx: Context): Promise<boolean> {
