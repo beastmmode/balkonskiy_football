@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: football-group-bot
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    disk:
+      name: football-bot-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: STORAGE_PATH
+        value: /var/data/storage-data.json
